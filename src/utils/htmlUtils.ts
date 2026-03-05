@@ -13,7 +13,7 @@ export const stripHtmlForAI = (text: string): string => {
         return match.replace(/</g, '___LT___').replace(/>/g, '___GT___');
     });
 
-    let stripped = protectedText
+    const stripped = protectedText
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<[^>]*>/g, '')
         .replace(/&amp;/g, '&')

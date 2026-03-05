@@ -128,7 +128,7 @@ export const renderComplexLatex = async (
     if (!ctx) return null;
 
     // Enhanced cleanup for complex LaTeX
-    let displayText = simplifyLataxForDisplay(latex);
+    const displayText = simplifyLataxForDisplay(latex);
 
     // Measure text
     ctx.font = `${fontSize}px 'Cambria Math', 'Times New Roman', serif`;
@@ -160,7 +160,7 @@ export const renderComplexLatex = async (
  * Simplify LaTeX for display without MathJax
  */
 const simplifyLataxForDisplay = (latex: string): string => {
-  let result = latex
+  const result = latex
     // Fractions
     .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)')
     // Roots

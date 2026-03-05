@@ -1,10 +1,11 @@
-
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, ImageRun, BorderStyle } from 'docx';
 import { ParseResult } from './parser/htmlParser';
 import { Question } from '@/components/QuestionDisplay';
 import { IMAGE_SRC_REGEX, stripHtmlForAI } from '@/utils/htmlUtils';
 import { containsMathExpression, renderMathToImage, extractMathExpressions } from '@/utils/mathRenderer';
 import { extractAllImages, base64ToUint8Array, fetchImageAsBuffer, scaleDimensions, convertSvgToPng } from '@/utils/imageExtractor';
+import { CIT_LOGO_BASE64 } from '@/assets/citLogoBase64';
+
 
 // Helper: get actual image dimensions from data URI or blob URL
 const getImageDimensions = (dataUrl: string): Promise<{ width: number; height: number }> => {
@@ -29,13 +30,20 @@ const scaleToFit = (width: number, height: number, maxWidth: number = 450): { wi
     return scaleDimensions(width, height, maxWidth, 600);
 };
 
-// Fetch the CIT logo as an ArrayBuffer
+// CIT logo as an ArrayBuffer from the pre-encoded Base64
+// No fetch needed — baked into the JS bundle at build time
 const fetchLogo = async (): Promise<ArrayBuffer> => {
     try {
-        const response = await fetch('/src/assets/cit-logo.png');
-        return await response.arrayBuffer();
+        const base64Data = CIT_LOGO_BASE64.split(',')[1];
+        if (!base64Data) return new ArrayBuffer(0);
+        const binaryString = atob(base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
     } catch (e) {
-        console.warn('Could not fetch CIT logo, using empty buffer');
+        console.warn('Could not decode CIT logo, using empty buffer');
         return new ArrayBuffer(0);
     }
 };
@@ -43,6 +51,15 @@ const fetchLogo = async (): Promise<ArrayBuffer> => {
 export const generateWordDocument = async (parseResult: ParseResult, iaType: 'IA1' | 'IA2' | 'IA3'): Promise<Blob> => {
     const logoBuffer = await fetchLogo();
     const { metadata, partA, partB, partC, pdfPageImages } = parseResult;
+
+    let subjectDisplay = '________________';
+    if (metadata.subjectCode && metadata.subjectName) {
+        subjectDisplay = `${metadata.subjectCode} / ${metadata.subjectName}`;
+    } else if (metadata.subjectCode) {
+        subjectDisplay = metadata.subjectCode;
+    } else if (metadata.subjectName) {
+        subjectDisplay = metadata.subjectName;
+    }
 
     const doc = new Document({
         sections: [
@@ -162,7 +179,7 @@ export const generateWordDocument = async (parseResult: ParseResult, iaType: 'IA
                                                     new TableRow({
                                                         children: [
                                                             new TableCell({
-                                                                children: [new Paragraph({ children: [new TextRun({ text: "Subject Code/Name: " + (metadata.subjectCode ? `${metadata.subjectCode} / ${metadata.subjectName}` : "________________"), bold: true })] })],
+                                                                children: [new Paragraph({ children: [new TextRun({ text: "Subject Code/Name: " + subjectDisplay, bold: true })] })],
                                                             }),
                                                             new TableCell({
                                                                 children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: "Time: " + metadata.time, bold: true })] })],
@@ -283,7 +300,7 @@ const extractImagesFromHtml = async (html: string, questionNumber: string) => {
         for (const extracted of extractedImages) {
             try {
                 if (extracted.isBase64 && extracted.base64Data) {
-                    let type = extracted.type || 'png';
+                    const type = extracted.type || 'png';
                     // Always try to normalize SVG or unsupported types to PNG for Word compatibility
                     if (type === 'svg' || type === 'webp' || extracted.src.includes('svg') || extracted.src.includes('webp')) {
                         console.log(`[DocGen] Q${questionNumber}: Normalizing ${type} to PNG for Word...`);

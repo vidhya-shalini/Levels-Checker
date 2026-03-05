@@ -50,18 +50,34 @@ const parseSubdivisionsFromText = (text: string): { subdivisions: string[]; hasS
   const plainText = containsHtml(text) ? stripHtmlForAI(text) : text;
   const subdivisions: string[] = [];
 
-  // Match patterns like "i) text" or "ii) text" - roman numerals followed by content
-  const romanPattern = /([ivxIVX]+\))\s*([^ivxIVX]+?)(?=(?:[ivxIVX]+\)|$))/gi;
-  let match;
+  // Strategy 1: Split approach - split on Roman numeral patterns that start a subdivision
+  // Match standalone Roman numeral markers like "i)", "ii)", "iii)", "iv)", "(i)", "(ii)"
+  // The marker must be preceded by start-of-string or a space (not in the middle of a word)
+  const splitPattern = /(?:^|\s)((?:i{1,3}|iv|v|vi{0,3})[)\.]|(?:\((?:i{1,3}|iv|v|vi{0,3})\)))\s*/gi;
 
-  while ((match = romanPattern.exec(plainText)) !== null) {
-    const fullMatch = (match[1] + ' ' + match[2]).trim();
-    if (fullMatch.length > 5) {
-      subdivisions.push(fullMatch);
+  // Find all marker positions
+  const markers: { index: number; marker: string }[] = [];
+  let match;
+  splitPattern.lastIndex = 0;
+  while ((match = splitPattern.exec(plainText)) !== null) {
+    markers.push({
+      index: match.index + (match[0].startsWith(' ') ? 1 : 0),
+      marker: match[1].trim()
+    });
+  }
+
+  if (markers.length >= 2) {
+    for (let i = 0; i < markers.length; i++) {
+      const start = markers[i].index;
+      const end = i + 1 < markers.length ? markers[i + 1].index : plainText.length;
+      const subText = plainText.substring(start, end).trim();
+      if (subText.length > 3) {
+        subdivisions.push(subText);
+      }
     }
   }
 
-  // If regex didn't work, try split approach
+  // Strategy 2: If split approach didn't work, try simpler split
   if (subdivisions.length < 2) {
     subdivisions.length = 0;
     const simplePattern = /([ivxIVX]+\))\s*/gi;

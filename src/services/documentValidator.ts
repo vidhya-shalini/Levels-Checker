@@ -103,7 +103,7 @@ function isQuestionPaper(htmlContent: string): { isQP: boolean; reason: string }
     })();
 
     // Check if document has clear IA markers (Internal Assessment, IA1/IA2/IA3, Model Exam, etc.)
-    const hasIAMarkers = /internal\s+assessment/i.test(text) ||
+    const hasIAMarkers = /internal\s+asses+ment/i.test(text) ||
         /\bIA\s*[-–—]?\s*[123I]+\b/i.test(text) ||
         /model\s+exam/i.test(text);
 
@@ -128,13 +128,21 @@ function isQuestionPaper(htmlContent: string): { isQP: boolean; reason: string }
         /introduction\s*:\s*/i,
         /conclusion\s*:\s*/i,
         /acknowledgement/i,
+        /mission\s+of\s+the\s+institute/i,
+        /vision\s+of\s+the\s+institute/i,
+        /program\s+educational\s+objectives/i,
+        /program\s+outcomes\b/i,
+        /program\s+specific\s+outcomes/i,
+        /\bsyllabus\b/i,
+        /\bcurriculum\b/i,
+        /\blab\s+manual\b/i,
     ];
     let genericScore = 0;
     for (const pattern of genericDocSignals) {
         if (pattern.test(text)) genericScore++;
     }
-    if (genericScore >= 3) {
-        return { isQP: false, reason: 'This appears to be a report, notes, or textbook — not a question paper.' };
+    if (genericScore >= 2) {
+        return { isQP: false, reason: 'This appears to be a report, syllabus, lab manual, or course document — not a question paper.' };
     }
 
     // --- Positive signals: markers of a valid question paper ---
@@ -151,7 +159,7 @@ function isQuestionPaper(htmlContent: string): { isQP: boolean; reason: string }
     if (/marks?\s*$/im.test(text) || /max\.?\s*marks/i.test(text)) qpScore += 1;
 
     // Internal Assessment / IA references
-    if (/internal\s+assessment/i.test(text)) qpScore += 3;
+    if (/internal\s+asses+ment/i.test(text)) qpScore += 3;
     if (/\bIA\s*[-–]?\s*[123]\b/i.test(text)) qpScore += 3;
     if (/model\s+exam/i.test(text)) qpScore += 2;
     if (/end\s*semester/i.test(text)) qpScore += 2;
@@ -185,67 +193,96 @@ function isQuestionPaper(htmlContent: string): { isQP: boolean; reason: string }
     return { isQP: true, reason: '' };
 }
 
-/**
- * Detect the IA type from document content.
- * Checks for "Internal Assessment 1/2/3", "IA1/IA2/IA3", "Model Exam" etc.
- */
 function detectIAType(htmlContent: string): string | null {
-    const text = htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    // Replace HTML tags with spaces, decode basic entities that interrupt text spacing, then normalize whitespace
+    const text = htmlContent
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/\s+/g, ' ');
 
-    // Check for specific IA type mentions
-    // Must check IA3 before IA1 because "IA1" is a substring issue with "Internal Assessment 1"
-    // and "III" comes before "I" in pattern specificity
-
+    let m;
     // IA3 / Model Exam detection
-    if (/Internal\s+Assessment\s*[-–—]?\s*3/i.test(text) ||
-        /\bIA\s*[-–—]?\s*3\b/i.test(text) ||
-        /Model\s+Exam(?:ination)?/i.test(text) ||
-        /\bIA\s*[-–—]?\s*III\b/i.test(text) ||
-        /Internal\s+Assessment\s*[-–—]?\s*III/i.test(text)) {
+    if ((m = /Internal.{1,30}?\b(?:3|III|I\s*I\s*I|l\s*l\s*l)\b/i.exec(text))) {
+        console.log(`[Validator] Triggered IA3 explicit match: "${m[0]}"`);
+        return 'IA3';
+    } else if ((m = /\bIA\s*[-–—]?\s*(?:3|III|I\s*I\s*I|l\s*l\s*l)\b/i.exec(text))) {
+        console.log(`[Validator] Triggered IA3 short match: "${m[0]}"`);
+        return 'IA3';
+    } else if ((m = /Model\s+Exam(?:ination)?/i.exec(text))) {
+        console.log(`[Validator] Triggered Model Exam match: "${m[0]}"`);
         return 'IA3';
     }
 
     // IA2 detection
-    if (/Internal\s+Assessment\s*[-–—]?\s*2/i.test(text) ||
-        /\bIA\s*[-–—]?\s*2\b/i.test(text) ||
-        /\bIA\s*[-–—]?\s*II\b/i.test(text) ||
-        /Internal\s+Assessment\s*[-–—]?\s*II(?!\s*I)/i.test(text)) {
+    if ((m = /Internal.{1,30}?\b(?:2|II|I\s*I|l\s*l)\b(?!\s*(?:I|l))/i.exec(text))) {
+        console.log(`[Validator] Triggered IA2 explicit match: "${m[0]}"`);
+        return 'IA2';
+    } else if ((m = /\bIA\s*[-–—]?\s*(?:2|II|I\s*I|l\s*l)\b(?!\s*(?:I|l))/i.exec(text))) {
+        console.log(`[Validator] Triggered IA2 short match: "${m[0]}"`);
         return 'IA2';
     }
 
     // IA1 detection
-    if (/Internal\s+Assessment\s*[-–—]?\s*1/i.test(text) ||
-        /\bIA\s*[-–—]?\s*1\b/i.test(text) ||
-        /\bIA\s*[-–—]?\s*I\b/i.test(text) ||
-        /Internal\s+Assessment\s*[-–—]?\s*I(?!\s*[IV])/i.test(text) ||
-        /\bEPC\b/i.test(text)) {
+    if ((m = /Internal.{1,30}?\b(?:1|I|l)\b(?!\s*(?:[IV]|I|l))/i.exec(text))) {
+        console.log(`[Validator] Triggered IA1 explicit match: "${m[0]}"`);
+        return 'IA1';
+    } else if ((m = /\bIA\s*[-–—]?\s*(?:1|I|l)\b(?!\s*(?:[IV]|I|l))/i.exec(text))) {
+        console.log(`[Validator] Triggered IA1 short match: "${m[0]}"`);
+        return 'IA1';
+    } else if ((m = /\bEPC\b/i.exec(text))) {
         return 'IA1';
     }
 
-    // Structural detection: check question numbering patterns
-    // IA3 typically has Part C (Q16+) and more questions
-    const hasPartC = /part\s*[-–—]?\s*c/i.test(text);
-    if (hasPartC) return 'IA3';
+    // Structural detection fallback
+    const hasIASignals = /internal.{1,30}?assess/i.test(text) ||
+        /\bIA\s*[-–—]?\s*[123I]+\b/i.test(text) ||
+        /model\s+exam/i.test(text) ||
+        /\bEPC\b/i.test(text);
 
-    // Check max marks
-    const maxMarksMatch = text.match(/max\.?\s*marks?\s*[:=]?\s*(\d+)/i);
-    if (maxMarksMatch) {
-        const marks = parseInt(maxMarksMatch[1]);
-        if (marks >= 90) return 'IA3'; // 100 marks = IA3
-        // 50 marks could be IA1 or IA2 — can't determine from marks alone
+    const hasNonQPSignals = /\bmission\s+of\s+the/i.test(text) ||
+        /\bvision\s+of\s+the/i.test(text) ||
+        /\bsyllabus\b/i.test(text) ||
+        /\bcurriculum\b/i.test(text) ||
+        /\bprogram\s+educational\s+objectives/i.test(text) ||
+        /\bprogram\s+outcomes\b/i.test(text) ||
+        /\bprogram\s+specific\s+outcomes/i.test(text);
+
+    if (hasNonQPSignals) {
+        console.log(`[Validator] Non-QP signals detected, rejecting.`);
+        return null;
     }
 
-    // Check CO focus
-    const coMentions = text.match(/\bCO\s*([1-6])\b/gi);
-    if (coMentions) {
-        const cos = new Set(coMentions.map(c => c.replace(/\s/g, '').toUpperCase()));
-        // IA1 focuses on CO1, IA2 on CO2+CO3, IA3 on CO3+CO4+CO5
-        if (cos.has('CO4') || cos.has('CO5')) return 'IA3';
-        if (cos.has('CO2') && cos.has('CO3') && !cos.has('CO1')) return 'IA2';
-        if (cos.has('CO1') && !cos.has('CO3') && !cos.has('CO4')) return 'IA1';
+    // Do NOT strictly enforce IA3 based on Part C since IA2 can also have Part C
+    // Check max marks (reliable only with IA signals)
+    if (hasIASignals) {
+        const maxMarksMatch = text.match(/max\.?\s*marks?\s*[:=]?\s*(\d+)/i);
+        if (maxMarksMatch) {
+            const marks = parseInt(maxMarksMatch[1]);
+            if (marks >= 90) {
+                console.log(`[Validator] 90+ marks detected: ${marks}. Returning IA3.`);
+                return 'IA3'; // 100 marks = IA3
+            }
+        }
     }
 
-    return null; // Cannot determine IA type
+    // CO-based detection
+    if (hasIASignals) {
+        const coMentions = text.match(/\bCO\s*([1-6])\b/gi);
+        if (coMentions) {
+            const cos = new Set(coMentions.map(c => c.replace(/\s/g, '').toUpperCase()));
+            // Only rely on CO if no explicit title is provided
+            if (cos.has('CO4') || cos.has('CO5')) {
+                console.log(`[Validator] CO4 or CO5 detected, indicating IA3.`);
+                return 'IA3';
+            }
+            if (cos.has('CO2') && cos.has('CO3') && !cos.has('CO1')) return 'IA2';
+            if (cos.has('CO1') && !cos.has('CO3') && !cos.has('CO4')) return 'IA1';
+        }
+    }
+
+    console.log(`[Validator] No explicit IA type found. Returning null.`);
+    return null;
 }
 
 /**

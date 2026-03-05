@@ -15,6 +15,7 @@ import { validateIA3, ValidationResult } from '@/services/validationService';
 import { supabase } from '@/integrations/supabase/client';
 import { fixQuestionWithFallback } from '@/services/localQuestionFixer';
 import { validateDocument } from '@/services/documentValidator';
+import { syncOrPairLevels } from '@/utils/orPairSync';
 
 const IA3Page = () => {
   const navigate = useNavigate();
@@ -44,50 +45,25 @@ const IA3Page = () => {
     }
 
     if (selectedFile) {
-      try {
-        setIsProcessing(true);
-        const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
-        if (isPdf) {
-          setPdfUrl(URL.createObjectURL(selectedFile));
-        }
-        const { html: content, pdfPageImages } = await parseFile(selectedFile);
-        // Defensive: ensure htmlContent is always a string. Some parsers may accidentally
-        // return non-string payloads (objects) for certain files — coerce safely.
-        if (typeof content === 'string') {
-          setHtmlContent(content);
-        } else if (content && typeof content === 'object') {
-          // If parser returned an object with an `html` field, prefer that
-          if ((content as any).html && typeof (content as any).html === 'string') {
-            setHtmlContent((content as any).html);
-          } else {
-            // Fallback: stringify to avoid [object Object] rendering
-            setHtmlContent(JSON.stringify(content));
-          }
-        } else {
-          setHtmlContent(String(content || ''));
-        }
-        setPdfPageImagesRef(pdfPageImages);
-      } catch (error) {
-        console.error("File parsing error:", error);
-        toast({
-          title: "Error reading file",
-          description: "Could not parse the uploaded file. Please try again.",
-          variant: "destructive",
-        });
-      } finally {
-        setIsProcessing(false);
+      const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        setPdfUrl(URL.createObjectURL(selectedFile));
       }
+      // Parse file later when "Submit for Verification" is clicked
+      setHtmlContent('');
+      setPdfPageImagesRef(undefined);
     } else {
       setHtmlContent('');
       setPdfUrl('');
+      setPdfPageImagesRef(undefined);
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!file) {
       toast({
         title: "No file selected",
-        description: "Please upload an HTML question paper first.",
+        description: "Please upload a question paper first.",
         variant: "destructive",
       });
       return;
@@ -96,8 +72,32 @@ const IA3Page = () => {
     setIsProcessing(true);
 
     try {
+      let currentHtmlContent = htmlContent;
+      let currentPdfPageImages = pdfPageImagesRef;
+
+      // Only parse if it hasn't been parsed yet
+      if (!currentHtmlContent && file.size > 0 && file.name !== 'restored.html') {
+        const { html: content, pdfPageImages } = await parseFile(file);
+
+        if (typeof content === 'string') {
+          currentHtmlContent = content;
+        } else if (content && typeof content === 'object') {
+          if ((content as any).html && typeof (content as any).html === 'string') {
+            currentHtmlContent = (content as any).html;
+          } else {
+            currentHtmlContent = JSON.stringify(content);
+          }
+        } else {
+          currentHtmlContent = String(content || '');
+        }
+
+        currentPdfPageImages = pdfPageImages;
+        setHtmlContent(currentHtmlContent);
+        setPdfPageImagesRef(pdfPageImages);
+      }
+
       // Step 1: Validate document is a valid question paper for this IA type
-      const docValidation = validateDocument(htmlContent, 'IA3');
+      const docValidation = validateDocument(currentHtmlContent, 'IA3');
       if (!docValidation.isValid) {
         toast({
           title: docValidation.errorTitle,
@@ -109,7 +109,7 @@ const IA3Page = () => {
       }
 
       // Step 2: Parse the HTML content to extract questions
-      const parsed = parseHTMLQuestions(htmlContent, 'IA3');
+      const parsed = parseHTMLQuestions(currentHtmlContent, 'IA3');
 
       // Check if we found any questions
       if (parsed.partA.length === 0 && parsed.partB.length === 0) {
@@ -130,9 +130,9 @@ const IA3Page = () => {
       });
 
       // Attach PDF page images if available
-      if (pdfPageImagesRef) {
-        parsed.pdfPageImages = pdfPageImagesRef;
-        console.log(`[IA3] Attached ${pdfPageImagesRef.filter(Boolean).length} PDF page images to ParseResult`);
+      if (currentPdfPageImages) {
+        parsed.pdfPageImages = currentPdfPageImages;
+        console.log(`[IA3] Attached ${currentPdfPageImages.filter(Boolean).length} PDF page images to ParseResult`);
       }
 
       setParseResult(parsed);
@@ -244,7 +244,7 @@ const IA3Page = () => {
           };
 
           const updatedPartA = prev.partA.map(updateQuestion);
-          const updatedPartB = prev.partB.map(updateQuestion);
+          const updatedPartB = syncOrPairLevels(prev.partB.map(updateQuestion));
           const updatedPartC = prev.partC?.map(updateQuestion);
 
           // Re-validate but skip fixed questions
@@ -373,7 +373,7 @@ const IA3Page = () => {
     const fixResults = new Map<string, { text: string; newLevel: string; newCo?: string; convertedToSingle: boolean }>();
 
     try {
-      const BATCH_SIZE = 3;
+      const BATCH_SIZE = 10;
       for (let i = 0; i < errorQuestions.length; i += BATCH_SIZE) {
         const batch = errorQuestions.slice(i, i + BATCH_SIZE);
 
@@ -473,7 +473,7 @@ const IA3Page = () => {
         };
 
         const updatedPartA = prev.partA.map(applyFix);
-        const updatedPartB = prev.partB.map(applyFix);
+        const updatedPartB = syncOrPairLevels(prev.partB.map(applyFix));
         const updatedPartC = prev.partC?.map(applyFix);
         const tempResult = validateIA3({ partA: [...updatedPartA], partB: [...updatedPartB], partC: updatedPartC ? [...updatedPartC] : undefined });
 
@@ -754,7 +754,7 @@ const IA3Page = () => {
         };
 
         const updatedPartA = prev.partA.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined }));
-        const updatedPartB = prev.partB.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined }));
+        const updatedPartB = syncOrPairLevels(prev.partB.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined })));
         const updatedPartC = prev.partC?.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined }));
 
         const tempResult = validateIA3({ partA: [...updatedPartA], partB: [...updatedPartB], partC: updatedPartC ? [...updatedPartC] : undefined });
@@ -855,14 +855,14 @@ const IA3Page = () => {
             IA 3 / MODEL LEVEL CHECKING
           </h1>
           <p className="text-muted-foreground">
-            100 Marks • All COs • Parts A, B & C • PDF, Word, HTML Formats
+            100 Marks • All COs • Parts A, B & C • HTML, Word Formats
           </p>
         </div>
 
         <div className="mb-8">
           <FileUpload
-            accept=".html,.htm,.docx,.doc,.pdf"
-            acceptLabel="Accepted formats: HTML, Word, PDF"
+            accept=".html,.htm,.docx,.doc"
+            acceptLabel="Accepted formats: HTML, WORD DOCX"
             file={file}
             onFileSelect={handleFileSelect}
           />
@@ -877,7 +877,7 @@ const IA3Page = () => {
             {pdfUrl ? (
               <div style={{ height: '1200px' }}>
                 <iframe
-                  src={pdfUrl}
+                  src={`${pdfUrl}#toolbar=0&navpanes=0`}
                   style={{ width: '100%', height: '100%', border: 'none' }}
                   title="PDF Preview"
                 />

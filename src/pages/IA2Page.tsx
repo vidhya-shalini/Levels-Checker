@@ -15,6 +15,7 @@ import { validateIA2, ValidationResult } from '@/services/validationService';
 import { supabase } from '@/integrations/supabase/client';
 import { fixQuestionWithFallback } from '@/services/localQuestionFixer';
 import { validateDocument } from '@/services/documentValidator';
+import { syncOrPairLevels } from '@/utils/orPairSync';
 
 const IA2Page = () => {
     const navigate = useNavigate();
@@ -44,36 +45,25 @@ const IA2Page = () => {
         }
 
         if (selectedFile) {
-            try {
-                setIsProcessing(true);
-                const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
-                if (isPdf) {
-                    setPdfUrl(URL.createObjectURL(selectedFile));
-                }
-                const { html: content, pdfPageImages } = await parseFile(selectedFile);
-                setHtmlContent(content);
-                setPdfPageImagesRef(pdfPageImages);
-            } catch (error) {
-                console.error("File parsing error:", error);
-                toast({
-                    title: "Error reading file",
-                    description: "Could not parse the uploaded file. Please try again.",
-                    variant: "destructive",
-                });
-            } finally {
-                setIsProcessing(false);
+            const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
+            if (isPdf) {
+                setPdfUrl(URL.createObjectURL(selectedFile));
             }
+
+            setHtmlContent('');
+            setPdfPageImagesRef(undefined);
         } else {
             setHtmlContent('');
             setPdfUrl('');
+            setPdfPageImagesRef(undefined);
         }
     };
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!file) {
             toast({
                 title: "No file selected",
-                description: "Please upload an HTML question paper first.",
+                description: "Please upload a question paper first.",
                 variant: "destructive",
             });
             return;
@@ -82,8 +72,31 @@ const IA2Page = () => {
         setIsProcessing(true);
 
         try {
+            let currentHtmlContent = htmlContent;
+            let currentPdfPageImages = pdfPageImagesRef;
+
+            if (!currentHtmlContent && file.size > 0 && file.name !== 'restored.html') {
+                const { html: content, pdfPageImages } = await parseFile(file);
+
+                if (typeof content === 'string') {
+                    currentHtmlContent = content;
+                } else if (content && typeof content === 'object') {
+                    if ((content as any).html && typeof (content as any).html === 'string') {
+                        currentHtmlContent = (content as any).html;
+                    } else {
+                        currentHtmlContent = JSON.stringify(content);
+                    }
+                } else {
+                    currentHtmlContent = String(content || '');
+                }
+
+                currentPdfPageImages = pdfPageImages;
+                setHtmlContent(currentHtmlContent);
+                setPdfPageImagesRef(pdfPageImages);
+            }
+
             // Step 1: Validate document is a valid question paper for this IA type
-            const docValidation = validateDocument(htmlContent, 'IA2');
+            const docValidation = validateDocument(currentHtmlContent, 'IA2');
             if (!docValidation.isValid) {
                 toast({
                     title: docValidation.errorTitle,
@@ -95,7 +108,7 @@ const IA2Page = () => {
             }
 
             // Step 2: Parse the HTML content to extract questions
-            const parsed = parseHTMLQuestions(htmlContent, 'IA2');
+            const parsed = parseHTMLQuestions(currentHtmlContent, 'IA2');
 
             // Check if we found any questions
             if (parsed.partA.length === 0 && parsed.partB.length === 0) {
@@ -116,9 +129,9 @@ const IA2Page = () => {
             });
 
             // Attach PDF page images if available
-            if (pdfPageImagesRef) {
-                parsed.pdfPageImages = pdfPageImagesRef;
-                console.log(`[IA2] Attached ${pdfPageImagesRef.filter(Boolean).length} PDF page images to ParseResult`);
+            if (currentPdfPageImages) {
+                parsed.pdfPageImages = currentPdfPageImages;
+                console.log(`[IA2] Attached ${currentPdfPageImages.filter(Boolean).length} PDF page images to ParseResult`);
             }
 
             setParseResult(parsed);
@@ -230,7 +243,7 @@ const IA2Page = () => {
                     };
 
                     const updatedPartA = prev.partA.map(updateQuestion);
-                    const updatedPartB = prev.partB.map(updateQuestion);
+                    const updatedPartB = syncOrPairLevels(prev.partB.map(updateQuestion));
                     const updatedPartC = prev.partC?.map(updateQuestion);
 
                     // Re-validate but skip fixed questions
@@ -302,7 +315,7 @@ const IA2Page = () => {
                                 })),
                                 isValid: partBErrors.length === 0
                             },
-                            partC: finalPartC ? {
+                            partC: (finalPartC && finalPartC.length > 0) ? {
                                 ...tempResult.partAnalysis.partC!,
                                 errors: partCErrors.map(q => ({
                                     part: 'C',
@@ -322,6 +335,7 @@ const IA2Page = () => {
                         ...prev,
                         partA: finalPartA,
                         partB: finalPartB,
+                        partC: finalPartC,
                     };
                 });
 
@@ -358,7 +372,7 @@ const IA2Page = () => {
         const fixResults = new Map<string, { text: string; newLevel: string; newCo?: string; convertedToSingle: boolean }>();
 
         try {
-            const BATCH_SIZE = 3;
+            const BATCH_SIZE = 10;
             for (let i = 0; i < errorQuestions.length; i += BATCH_SIZE) {
                 const batch = errorQuestions.slice(i, i + BATCH_SIZE);
 
@@ -455,7 +469,7 @@ const IA2Page = () => {
                 };
 
                 const updatedPartA = prev.partA.map(applyFix);
-                const updatedPartB = prev.partB.map(applyFix);
+                const updatedPartB = syncOrPairLevels(prev.partB.map(applyFix));
                 const updatedPartC = prev.partC?.map(applyFix);
                 const tempResult = validateIA2({
                     partA: [...updatedPartA],
@@ -498,7 +512,7 @@ const IA2Page = () => {
                             errors: partBErrors.map(q => ({ part: 'B', questionNumber: q.questionNumber, issue: q.errorMessage || 'Unknown error', suggestion: q.expectedLevel ? `Change to ${q.expectedLevel}` : 'Fix this issue' })),
                             isValid: partBErrors.length === 0
                         },
-                        partC: finalPartC ? {
+                        partC: (finalPartC && finalPartC.length > 0) ? {
                             ...tempResult.partAnalysis.partC!,
                             errors: finalPartC.filter(q => q.hasError && !q.isFixed).map(q => ({ part: 'C', questionNumber: q.questionNumber, issue: q.errorMessage || 'Unknown error', suggestion: q.expectedLevel ? `Change to ${q.expectedLevel}` : 'Fix this issue' })),
                             isValid: finalPartC.filter(q => q.hasError && !q.isFixed).length === 0
@@ -622,6 +636,7 @@ const IA2Page = () => {
             };
 
             // Multi-pass adjustment to handle cascading changes
+            // Multi-pass adjustment to handle cascading changes
             for (let pass = 0; pass < 3 && !isWithinTolerance(projected); pass++) {
                 // If too many L4/L5/L6, convert some to L3
                 if (projected.l456Pct > 20 + TOLERANCE) {
@@ -645,10 +660,30 @@ const IA2Page = () => {
 
                 if (projected.l1l2Pct > 40 + TOLERANCE) {
                     const excess = projected.l1l2 - Math.round(total * 0.4);
-                    const candidates = parseResult.partA
+                    // PRIORITIZE PART B L1/L2 for conversion to L3!
+                    const partBCandidates = parseResult.partB
                         .filter(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id));
-                    for (let i = 0; i < Math.min(excess, candidates.length); i++) {
-                        addChange(candidates[candidates.length - 1 - i], 'L3');
+                    let changed = 0;
+                    for (let i = 0; i < partBCandidates.length && changed < excess; i++) {
+                        if (!changedIds.has(partBCandidates[i].id)) {
+                            addChange(partBCandidates[i], 'L3');
+                            changed++;
+                        }
+                    }
+
+                    // Only use Part A if still in excess, and respect the max L3 limit (10% - 15% max)
+                    if (changed < excess) {
+                        const candidates = parseResult.partA
+                            .filter(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id));
+                        const currentPartAL3 = parseResult.partA.filter(q => getProjectedLevel(q) === 'L3').length;
+                        const maxPartAL3 = Math.max(1, Math.floor(parseResult.partA.length * 0.15));
+                        let allowedToAdd = Math.max(0, maxPartAL3 - currentPartAL3);
+
+                        for (let i = 0; i < candidates.length && changed < excess && allowedToAdd > 0; i++) {
+                            addChange(candidates[candidates.length - 1 - i], 'L3');
+                            changed++;
+                            allowedToAdd--;
+                        }
                     }
                     projected = calcProjectedDist();
                 }
@@ -656,16 +691,33 @@ const IA2Page = () => {
                 // If too few L3, convert from higher levels or L1/L2
                 if (projected.l3Pct < 40 - TOLERANCE) {
                     const deficit = Math.round(total * 0.4) - projected.l3;
+
                     const partBHigher = parseResult.partB
                         .filter(q => ['L4', 'L5', 'L6'].includes(getProjectedLevel(q)) && !changedIds.has(q.id) && q.marks !== 16);
                     let changed = 0;
                     for (let i = 0; i < partBHigher.length && changed < deficit; i++) {
                         if (!changedIds.has(partBHigher[i].id)) { addChange(partBHigher[i], 'L3'); changed++; }
                     }
+
+                    // Take from Part B L1/L2 Before Part A!
+                    const partBL1L2 = parseResult.partB
+                        .filter(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id));
+                    for (let i = 0; i < partBL1L2.length && changed < deficit; i++) {
+                        if (!changedIds.has(partBL1L2[i].id)) { addChange(partBL1L2[i], 'L3'); changed++; }
+                    }
+
                     const partAL1L2 = parseResult.partA
                         .filter(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id));
-                    for (let i = 0; i < partAL1L2.length && changed < deficit; i++) {
-                        if (!changedIds.has(partAL1L2[i].id)) { addChange(partAL1L2[i], 'L3'); changed++; }
+                    const currentPartAL3 = parseResult.partA.filter(q => getProjectedLevel(q) === 'L3').length;
+                    const maxPartAL3 = Math.max(1, Math.floor(parseResult.partA.length * 0.15));
+                    let allowedToAdd = Math.max(0, maxPartAL3 - currentPartAL3);
+
+                    for (let i = 0; i < partAL1L2.length && changed < deficit && allowedToAdd > 0; i++) {
+                        if (!changedIds.has(partAL1L2[i].id)) {
+                            addChange(partAL1L2[i], 'L3');
+                            changed++;
+                            allowedToAdd--;
+                        }
                     }
                     projected = calcProjectedDist();
                 }
@@ -681,9 +733,15 @@ const IA2Page = () => {
                 }
 
                 if (projected.l3 === 0) {
-                    const candidate = parseResult.partA
+                    const candidate = parseResult.partB
                         .find(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id));
-                    if (candidate) addChange(candidate, 'L3');
+                    if (candidate) {
+                        addChange(candidate, 'L3');
+                    } else {
+                        const partACandidate = parseResult.partA
+                            .find(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id));
+                        if (partACandidate) addChange(partACandidate, 'L3');
+                    }
                     projected = calcProjectedDist();
                 }
 
@@ -698,8 +756,18 @@ const IA2Page = () => {
                     const deficit = Math.round(total * 0.2) - projected.l456;
                     const candidates = parseResult.partB
                         .filter(q => getProjectedLevel(q) === 'L3' && !changedIds.has(q.id));
-                    for (let i = 0; i < Math.min(deficit, candidates.length); i++) {
+                    let changed = 0;
+                    for (let i = 0; i < candidates.length && changed < deficit; i++) {
                         addChange(candidates[i], 'L4');
+                        changed++;
+                    }
+
+                    if (changed < deficit) {
+                        const l2Candidates = parseResult.partB.filter(q => ['L1', 'L2'].includes(getProjectedLevel(q)) && !changedIds.has(q.id) && q.marks === 16);
+                        for (let i = 0; i < l2Candidates.length && changed < deficit; i++) {
+                            addChange(l2Candidates[i], 'L4');
+                            changed++;
+                        }
                     }
                     projected = calcProjectedDist();
                 }
@@ -707,7 +775,7 @@ const IA2Page = () => {
 
             // Apply changes via AI — collect results
             const distFixResults = new Map<string, { text: string; newLevel: string }>();
-            for (const { question, newLevel } of questionsToChange) {
+            await Promise.all(questionsToChange.map(async ({ question, newLevel }) => {
                 try {
                     const result = await fixQuestionWithFallback(
                         supabase,
@@ -726,7 +794,7 @@ const IA2Page = () => {
                 } catch (err) {
                     console.error(`Failed to adjust question ${question.questionNumber} to ${newLevel}:`, err);
                 }
-            }
+            }));
 
             // Apply ALL distribution changes atomically via functional state updater
             setParseResult(prev => {
@@ -844,14 +912,14 @@ const IA2Page = () => {
                         IA 2 LEVEL CHECKING
                     </h1>
                     <p className="text-muted-foreground">
-                        50 Marks • CO2 & CO3 Focus • PDF, Word, HTML Formats
+                        50 Marks • CO2 & CO3 Focus • HTML, Word Formats
                     </p>
                 </div>
 
                 <div className="mb-8">
                     <FileUpload
-                        accept=".html,.htm,.docx,.doc,.pdf"
-                        acceptLabel="Accepted formats: HTML, Word, PDF"
+                        accept=".html,.htm,.docx,.doc"
+                        acceptLabel="Accepted formats: HTML, WORD DOCX"
                         file={file}
                         onFileSelect={handleFileSelect}
                     />
@@ -866,7 +934,7 @@ const IA2Page = () => {
                         {pdfUrl ? (
                             <div style={{ height: '1200px' }}>
                                 <iframe
-                                    src={pdfUrl}
+                                    src={`${pdfUrl}#toolbar=0&navpanes=0`}
                                     style={{ width: '100%', height: '100%', border: 'none' }}
                                     title="PDF Preview"
                                 />

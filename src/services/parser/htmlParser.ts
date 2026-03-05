@@ -147,7 +147,8 @@ const parseSubdivisionsFromText = (text: string): { subdivisions: string[]; hasS
 };
 
 // Parse subdivisions from a question row
-const parseSubdivisions = (row: Element, cells: NodeListOf<Element>, questionText: string): { count: number; levels: string[]; marks: number[]; hasSubdivisions: boolean } => {
+// Parse subdivisions from a question row
+const parseSubdivisions = (row: Element, cells: NodeListOf<Element>, questionText: string, levelTextOverride?: string, marksTextOverride?: string): { count: number; levels: string[]; marks: number[]; hasSubdivisions: boolean } => {
   const levels: string[] = [];
   let parsedMarks: number[] = [];
 
@@ -155,9 +156,8 @@ const parseSubdivisions = (row: Element, cells: NodeListOf<Element>, questionTex
   const textSubdivisions = parseSubdivisionsFromText(questionText);
 
   // Check for multiple levels in the RBT column (separated by newlines or spaces)
-  const levelCell = cells[3];
-  if (levelCell) {
-    const levelText = levelCell.textContent || '';
+  const levelText = levelTextOverride !== undefined ? levelTextOverride : (cells[3]?.textContent || '');
+  if (levelText) {
     // Extract all L1-L6 patterns
     const levelMatches = levelText.match(/L\d/gi);
     if (levelMatches) {
@@ -166,9 +166,8 @@ const parseSubdivisions = (row: Element, cells: NodeListOf<Element>, questionTex
   }
 
   // Check for marks in the marks column
-  const marksCell = cells[4];
-  if (marksCell) {
-    const marksText = marksCell.textContent || '';
+  const marksText = marksTextOverride !== undefined ? marksTextOverride : (cells[4]?.textContent || '');
+  if (marksText) {
     const marksMatches = marksText.match(/\d+/g);
     if (marksMatches) {
       parsedMarks = marksMatches.map(m => parseInt(m));
@@ -207,22 +206,38 @@ const extractMetadata = (doc: Document, iaType: string) => {
     return el?.textContent?.trim() || '';
   };
 
+  // Helper to thoroughly clean extracted strings (stripping non-breaking spaces, newlines, tabs, and resolving multiple spaces to single)
+  const cleanMetadataString = (str: string) => {
+    if (!str) return '';
+    return str.replace(/[\xA0\u200B\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+
   // Try to find subject code/name
   let subjectCode = '';
   let subjectName = '';
   const codeCell = doc.querySelector('#code');
   if (codeCell) {
-    const text = codeCell.textContent?.trim() || '';
-    const parts = text.split('/');
-    if (parts.length >= 2) {
-      subjectCode = parts[0].trim();
-      subjectName = parts.slice(1).join('/').trim();
-    } else if (text) {
-      subjectName = text;
+    let text = codeCell.textContent || '';
+    // Strip the label prefix "Subject Code / Name:" before parsing the actual values
+    // Using a more generous regex to ignore internal spaces and newlines
+    text = text.replace(/^\s*Subject\s*(?:Code|Name|Title)\s*[/\\]?\s*(?:Code|Name|Title)?\s*[:.\-]?\s*/i, '').trim();
+    text = text.replace(/_+/g, '').trim(); // Remove underscore placeholders like '____'
+
+    if (text) {
+      if (text.includes('/')) {
+        const parts = text.split('/');
+        subjectCode = parts[0].trim();
+        subjectName = parts.slice(1).join('/').trim();
+      } else if (text.includes('-')) {
+        const parts = text.split('-');
+        subjectCode = parts[0].trim();
+        subjectName = parts.slice(1).join('-').trim();
+      } else {
+        subjectName = text;
+      }
     }
   }
 
-  // If not found by ID, search through table cells - AGGRESSIVE pattern matching
   if (!subjectCode && !subjectName) {
     const allTables = doc.querySelectorAll('table');
     allTables.forEach(table => {
@@ -234,13 +249,36 @@ const extractMetadata = (doc: Document, iaType: string) => {
         const rowText = row.textContent?.trim() || '';
 
         // Strategy 1: Look for "Subject Code/Name" label row
-        if (/Subject.*Code|Subject.*Name/i.test(rowText)) {
+        if (/Subject(?:.*Code|.*Name|.*Title)/i.test(rowText)) {
           for (let i = 0; i < cells.length; i++) {
-            const cellText = cells[i]?.textContent?.trim() || '';
+            const cellText = cells[i]?.textContent || '';
+            const cleanedCellText = cleanMetadataString(cellText);
 
-            // Check if this cell contains code and name together (e.g., "EC4212 / ELECTRONIC DEVICES" or "CS4401 / Theory of Computation")
-            const combinedMatch = cellText.match(/([A-Z]{2,}[0-9]{4})\s*[/\-–]\s*([A-Za-z\s&(),\-–]+?)(?:\(|$)/);
-            if (combinedMatch) {
+            // Attempt to extract from same cell if they user typed value inside the same cell
+            if (/Subject(?:.*Code|.*Name|.*Title)/i.test(cleanedCellText)) {
+              let content = cleanedCellText.replace(/Subject\s*(?:Code|Name|Title)?\s*[/\\]?\s*(?:Code|Name|Title)?\s*[:.\-]?\s*/i, '').trim();
+              content = content.replace(/_+/g, '').trim();
+
+              if (content.length > 2) {
+                if (content.includes('/')) {
+                  const parts = content.split('/');
+                  subjectCode = parts[0].trim();
+                  subjectName = parts.slice(1).join('/').trim();
+                } else if (content.includes('-')) {
+                  const parts = content.split('-');
+                  subjectCode = parts[0].trim();
+                  subjectName = parts.slice(1).join('-').trim();
+                } else {
+                  if (/^[A-Z0-9]{3,10}$/i.test(content)) subjectCode = content;
+                  else subjectName = content;
+                }
+                if (subjectCode || subjectName) return;
+              }
+            }
+
+            // Check if this cell contains purely code and name together without the "Subject" literal
+            const combinedMatch = cleanedCellText.match(/([A-Z]{2,}\s*[0-9]{4})\s*[/\-–]\s*([A-Za-z\s&(),\-–]+?)(?:\(|$)/);
+            if (combinedMatch && !/Subject/i.test(cleanedCellText)) {
               subjectCode = combinedMatch[1].trim();
               subjectName = combinedMatch[2].trim();
               console.log(`[Metadata] Found combined subject via regex: ${subjectCode} / ${subjectName}`);
@@ -248,14 +286,13 @@ const extractMetadata = (doc: Document, iaType: string) => {
             }
 
             // Extract code pattern: CSXXXX, ECXXXX, etc.
-            const codeMatch = cellText.match(/([A-Z]{2,}[0-9]{4})/);
+            const codeMatch = cleanedCellText.match(/([A-Z]{2,}\s*[0-9]{3,})/);
             if (codeMatch) {
               subjectCode = codeMatch[1];
               console.log(`[Metadata] Found subject code: ${subjectCode}`);
 
               // Try to extract name from same or adjacent cells
-              // Name might be: after "/" in same cell, in next cell, or after "(" in same cell
-              const nameAfterSlash = cellText.match(/[A-Z]{2,}[0-9]{4}\s*[/\-–]\s*([A-Za-z\s&(),\-–]+)/);
+              const nameAfterSlash = cleanedCellText.match(/[A-Z]{2,}\s*[0-9]{3,}\s*[/\-–]\s*([A-Za-z\s&(),\-–]+)/);
               if (nameAfterSlash) {
                 subjectName = nameAfterSlash[1].trim().replace(/\s*\(.*/, '').trim(); // Remove any bracketed content
                 console.log(`[Metadata] Found subject name after slash: ${subjectName}`);
@@ -264,9 +301,10 @@ const extractMetadata = (doc: Document, iaType: string) => {
 
               // Name in next cell
               if (i + 1 < cells.length) {
-                const nextCell = cells[i + 1]?.textContent?.trim() || '';
-                if (!/Code|Name|Subject|^[0-9]$/i.test(nextCell) && nextCell.length > 3) {
-                  subjectName = nextCell;
+                const nextCell = cells[i + 1]?.textContent || '';
+                const cleanNext = cleanMetadataString(nextCell).replace(/_+/g, '').trim();
+                if (!/Code|Name|Subject|^[0-9]{1,2}$/i.test(cleanNext) && cleanNext.length > 3) {
+                  subjectName = cleanNext;
                   console.log(`[Metadata] Found subject name in next cell: ${subjectName}`);
                   return;
                 }
@@ -281,16 +319,16 @@ const extractMetadata = (doc: Document, iaType: string) => {
           for (let i = 0; i < cells.length; i++) {
             const cellText = cells[i]?.textContent?.trim() || '';
 
-            // Find 4-letter code + 4 digits pattern
-            const codeMatch = cellText.match(/([A-Z]{2,}[0-9]{4})\s*[(/\-–]?\s*([A-Za-z\s&()\-–]*)?/);
+            // Find letter code + digits pattern (allow spaces like "EC 5102")
+            const codeMatch = cellText.match(/([A-Z]{2,}\s*[0-9]{3,})\s*[(/\-–]?\s*([A-Za-z\s&()\-–]*)?/);
             if (codeMatch && codeMatch[1]) {
               // Verify this looks like a subject code (not just any code)
               const potentialCode = codeMatch[1];
-              if (/^(CS|EC|EE|ME|CE|IT|IS|BT|CV|AM|ST|CH|SA|AP|BO|EN|AR)\d{4}/.test(potentialCode)) {
+              if (/^(CS|EC|EE|ME|CE|IT|IS|BT|CV|AM|ST|CH|SA|AP|BO|EN|AR)\s*\d{3,}/.test(potentialCode)) {
                 subjectCode = potentialCode;
 
                 // Try to extract subject name from same cell after "/"
-                const withSlash = cellText.match(/[A-Z]{2,}[0-9]{4}\s*[/]\s*(.+)/);
+                const withSlash = cellText.match(/[A-Z]{2,}\s*[0-9]{3,}\s*[/]\s*(.+)/);
                 if (withSlash) {
                   subjectName = withSlash[1].trim().replace(/\s*\(.*/, '').trim();
                   console.log(`[Metadata] Strategy 2: Found ${subjectCode} / ${subjectName}`);
@@ -330,27 +368,82 @@ const extractMetadata = (doc: Document, iaType: string) => {
 
   // Fallback: search full document text for metadata
   const bodyText = doc.body?.textContent || '';
+  const cleanBodyText = cleanMetadataString(bodyText).replace(/_+/g, ' ');
 
+  if (!subjectCode) {
+    const m = cleanBodyText.match(/(?:Subject\s*(?:Code|Name)?\s*[/\\]?\s*(?:Code|Name)?\s*[:.-]?\s*)?([A-Z]{2,}\s*\d{3,})\s*[/\\]\s*([A-Z][A-Za-z\s&]+?)(?:\s+Time|\s+Max|\s+Branch|$)/i);
+    if (m) { subjectCode = m[1].trim(); if (!subjectName) subjectName = m[2].trim(); }
+  }
+
+  // Check for DOCX-injected hidden metadata divs (these are reliable since they
+  // were extracted from the raw DOCX text, bypassing mammoth's table cell splitting)
   let date = '';
-  const dateMatch = bodyText.match(/Date[:\s]+([\d./-]+)/i);
-  if (dateMatch) date = dateMatch[1].trim();
+  const dateCellEl = doc.querySelector('#dateCell');
+  if (dateCellEl) {
+    const dateCellText = cleanMetadataString(dateCellEl.textContent || '');
+    const dm = dateCellText.match(/Date\s*[:.\\-]?\s*([\d./-]+)/i);
+    if (dm) date = dm[1].trim();
+  }
+  if (!date) {
+    const dateMatch = cleanBodyText.match(/Date\s*[:.]?\s*([\d./-]+)/i);
+    if (dateMatch) date = dateMatch[1].trim();
+  }
 
   let maxMarks = iaType === 'IA3' ? '100 Marks' : '50 Marks';
-  const marksMatch = bodyText.match(/Max\.?\s*Marks[:\s]+(\d+(?:\s*Marks)?)/i);
-  if (marksMatch) maxMarks = marksMatch[1].trim();
+  const maxMarksCellEl = doc.querySelector('#maxMarksCell');
+  if (maxMarksCellEl) {
+    const mmText = cleanMetadataString(maxMarksCellEl.textContent || '');
+    const mm = mmText.match(/Max\.?\s*Marks?\s*[:.\\-]?\s*(\d+(?:\s*Marks?)?)/i);
+    if (mm) maxMarks = mm[1].trim();
+  }
+  if (maxMarks === (iaType === 'IA3' ? '100 Marks' : '50 Marks')) {
+    const marksMatch = cleanBodyText.match(/Max\.?\s*Marks?\s*[:.]?\s*(\d+(?:\s*Marks?)?)/i);
+    if (marksMatch) maxMarks = marksMatch[1].trim();
+  }
 
   let time = iaType === 'IA3' ? '3 hrs' : '1.30 hrs';
-  const timeMatch = bodyText.match(/Time[:\s]+([\d.:]+\s*(?:hours?|hrs?)?)/i);
-  if (timeMatch) time = timeMatch[1].trim();
+  const timeCellEl = doc.querySelector('#timeCell');
+  if (timeCellEl) {
+    const tText = cleanMetadataString(timeCellEl.textContent || '');
+    const tm = tText.match(/Time\s*[:.\\-]?\s*(\d+(?:\.\d+)?\s*(?:hrs?|hours?|mins?))/i);
+    if (tm) time = tm[1].trim();
+  }
+  if (time === (iaType === 'IA3' ? '3 hrs' : '1.30 hrs')) {
+    const timeMatch = cleanBodyText.match(/Time\s*[:.]?\s*(\d+\s*(?:hrs?|hours?|mins?))/i);
+    if (timeMatch) time = timeMatch[1].trim();
+  }
 
-  // Additional fallback: Extract from body text if not found via tables
   let branch = '';
-  const branchMatch = bodyText.match(/Branch[:\s]+([A-Za-z0-9\s/&,]+?)(?:\n|$|Date|Subject|Year)/i);
-  if (branchMatch) branch = branchMatch[1].trim();
+  // Check for DOCX-injected hidden div first
+  const branchCellEl = doc.querySelector('#branchCell');
+  if (branchCellEl) {
+    const brText = cleanMetadataString(branchCellEl.textContent || '');
+    const bm = brText.match(/Branch\s*[:.\\-]?\s*(.+)/i);
+    if (bm && bm[1].trim().length > 1) {
+      branch = bm[1].trim();
+      console.log('[Metadata] Branch from injected div:', branch);
+    }
+  }
+  if (!branch) {
+    const branchMatch = cleanBodyText.match(/Branch\s*[:.\-]?\s*([A-Za-z.\s&(),\-]+?)(?:\s+Year|\s+Date|$)/i);
+    if (branchMatch) branch = branchMatch[1].trim();
+  }
 
   let yearSem = '';
-  const yearSemMatch = bodyText.match(/Year\s*(?:\/\s*)?Sem(?:ester)?[:\s]+([A-Za-z0-9\s/,-]+?)(?:\n|$|Date|Subject|Branch)/i);
-  if (yearSemMatch) yearSem = yearSemMatch[1].trim();
+  // Check for DOCX-injected hidden div first
+  const yearSemCellEl = doc.querySelector('#yearSemesterCell');
+  if (yearSemCellEl) {
+    const ysText = cleanMetadataString(yearSemCellEl.textContent || '');
+    const ym = ysText.match(/Year\s*[/\\\\]?\s*Sem(?:ester)?\s*[:.\\-]?\s*(.+)/i);
+    if (ym && ym[1].trim().length > 0) {
+      yearSem = ym[1].trim();
+      console.log('[Metadata] YearSem from injected div:', yearSem);
+    }
+  }
+  if (!yearSem) {
+    const yearSemMatch = cleanBodyText.match(/Year\s*[/\\\\]?\s*Sem(?:ester)?\s*[:.\-]?\s*([A-Za-z0-9\s/IVX]+?)(?:\s|$)/i);
+    if (yearSemMatch) yearSem = yearSemMatch[1].trim();
+  }
 
   // Extract Course Objectives & Course Outcomes from document
   const courseObjectives: string[] = [];
@@ -472,7 +565,7 @@ const extractMetadata = (doc: Document, iaType: string) => {
     let coMatch;
     while ((coMatch = coRegex.exec(coSearchText)) !== null) {
       const coNum = coMatch[1];
-      let desc = coMatch[2].trim().replace(/\s+/g, ' ').trim();
+      const desc = coMatch[2].trim().replace(/\s+/g, ' ').trim();
       if (desc.length > 5) {
         const coKey = `CO${coNum}`;
         if (!courseOutcomes.find(c => c.co === coKey)) {
@@ -507,7 +600,7 @@ const extractMetadata = (doc: Document, iaType: string) => {
         if (Array.isArray(parsed)) {
           parsed.forEach((item: any) => {
             if (item.co && item.description) {
-              courseOutcomes.push({ co: item.co, description: item.description });
+              courseOutcomes.push({ co: item.co, description: item.description, level: item.level || '' });
             }
           });
         }
@@ -542,9 +635,15 @@ const extractMetadata = (doc: Document, iaType: string) => {
   let branchFromId = getText('#branchCell');
   let yearSemFromId = getText('#yearSemesterCell');
 
+  // Strip label prefixes from PDF-generated HTML cells
+  // e.g. "Branch: B.E - EC(ACT) & EC(VLSI)" → "B.E - EC(ACT) & EC(VLSI)"
+  // e.g. "Year / Sem: IV / VII" → "IV / VII"
+  branchFromId = cleanMetadataString(branchFromId).replace(/^\s*Branch\s*[:.\-]?\s*/i, '').replace(/_+/g, '').trim();
+  yearSemFromId = cleanMetadataString(yearSemFromId).replace(/^\s*Year\s*[/\\]?\s*Sem(?:ester)?\s*[:.\-]?\s*/i, '').replace(/_+/g, '').trim();
+
   // Use values from ID if available, otherwise use fallback
-  if (!branch && branchFromId) branch = branchFromId;
-  if (!yearSem && yearSemFromId) yearSem = yearSemFromId;
+  if (!branch && branchFromId && branchFromId.length > 1) branch = branchFromId;
+  if (!yearSem && yearSemFromId && yearSemFromId.length > 0) yearSem = yearSemFromId;
 
   // If still not found, search through table cells
   if (!branch || !yearSem) {
@@ -562,16 +661,22 @@ const extractMetadata = (doc: Document, iaType: string) => {
             if (/Branch/i.test(cellText)) {
               // Branch value might be in the next cell or same cell after "Branch:"
               if (i + 1 < cells.length) {
-                const nextCell = cells[i + 1]?.textContent?.trim() || '';
+                const nextCell = cells[i + 1]?.textContent || '';
                 if (nextCell && !/Branch/i.test(nextCell)) {
-                  branch = nextCell;
-                  break;
+                  let cleanedNext = cleanMetadataString(nextCell).replace(/_+/g, '').trim();
+                  if (cleanedNext && cleanedNext.length > 1) {
+                    branch = cleanedNext;
+                    break;
+                  }
                 }
               }
               // Or extract from same cell after "Branch:"
-              const branchMatch = cellText.match(/Branch[:\s]+([^,\n]+)/i);
+              // Using clean string to match properly
+              const cleanedCell = cleanMetadataString(cellText);
+              const branchMatch = cleanedCell.match(/Branch[:\s]+([^,\n]+)/i);
               if (branchMatch && !branch) {
-                branch = branchMatch[1].trim();
+                let parsedBranch = branchMatch[1].trim().replace(/_+/g, '').trim();
+                if (parsedBranch) branch = parsedBranch;
               }
             }
           }
@@ -582,18 +687,23 @@ const extractMetadata = (doc: Document, iaType: string) => {
           for (let i = 0; i < cells.length; i++) {
             const cellText = cells[i]?.textContent?.trim() || '';
             if (/Year|Sem/i.test(cellText)) {
-              // Year/Sem value might be in the next cell or same cell after "Year/Sem:"
-              if (i + 1 < cells.length) {
-                const nextCell = cells[i + 1]?.textContent?.trim() || '';
-                if (nextCell && !/Year|Sem/i.test(nextCell) && nextCell.length > 0) {
-                  yearSem = nextCell;
-                  break;
+              // Year/Sem value might be in subsequent cells
+              for (let nextC = i + 1; nextC < cells.length; nextC++) {
+                const nextCell = cells[nextC]?.textContent || '';
+                if (nextCell && !/Year|Sem/i.test(nextCell)) {
+                  let cleanedNext = cleanMetadataString(nextCell).replace(/_+/g, '').trim();
+                  if (cleanedNext && cleanedNext.length > 0 && !/^[:\-]+$/.test(cleanedNext)) {
+                    yearSem = cleanedNext;
+                    break;
+                  }
                 }
               }
               // Or extract from same cell after "Year/Sem:"
-              const yearSemMatch = cellText.match(/Year\s*(?:\/\s*)?Sem(?:ester)?[:\s]+([^,\n]+)/i);
+              const cleanedCell = cleanMetadataString(cellText);
+              const yearSemMatch = cleanedCell.match(/Year\s*(?:\/\s*)?Sem(?:ester)?[:\s]+([^,\n]+)/i);
               if (yearSemMatch && !yearSem) {
-                yearSem = yearSemMatch[1].trim();
+                let parsedYS = yearSemMatch[1].trim().replace(/_+/g, '').trim();
+                if (parsedYS && parsedYS !== ':' && parsedYS !== '-') yearSem = parsedYS;
               }
             }
           }
@@ -602,15 +712,18 @@ const extractMetadata = (doc: Document, iaType: string) => {
     });
   }
 
+  const finalYearSem = cleanMetadataString(yearSem || '').trim().replace(/^[:\-]+$/, '').trim();
+  const finalBranch = cleanMetadataString(branch || '').trim().replace(/^[:\-]+$/, '').trim();
+
   return {
     title: 'CHENNAI INSTITUTE OF TECHNOLOGY',
-    subjectCode,
-    subjectName,
-    date,
-    maxMarks,
-    time,
-    branch: branch || '',
-    yearSem: yearSem || '',
+    subjectCode: cleanMetadataString(subjectCode),
+    subjectName: cleanMetadataString(subjectName),
+    date: cleanMetadataString(date),
+    maxMarks: cleanMetadataString(maxMarks),
+    time: cleanMetadataString(time),
+    branch: finalBranch,
+    yearSem: finalYearSem,
     iaType: detectedIaType,
     courseObjectives: courseObjectives.length > 0 ? courseObjectives : undefined,
     courseOutcomes: courseOutcomes.length > 0 ? courseOutcomes : undefined
@@ -638,7 +751,17 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
       return;
     }
 
-    if (cells.length < 3) return; // Skip header rows, page-image rows, and other single-cell rows
+    if (cells.length < 3) {
+      if (lastQuestion) {
+        const cellHtml = row.innerHTML;
+        if (/<img[^>]+>/i.test(cellHtml)) {
+          // Docx image on its own row, append to last question!
+          lastQuestion.originalHtml = (lastQuestion.originalHtml || lastQuestion.text) + '<br>' + cellHtml;
+          console.log(`[Parser] Appended standalone image row to Q${lastQuestion.questionNumber}`);
+        }
+      }
+      return; // Skip header rows, page-image rows, and other single-cell rows
+    }
 
     // Check if first cell has colspan spanning full table width (header-like)
     const firstCell = cells[0];
@@ -646,7 +769,18 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
     if (colspan >= 3) return; // Only skip full-width header rows, not partial merges
 
     // Extract question number
-    const qNoText = cells[0]?.textContent?.trim() || '';
+    let qNoText = cells[0]?.textContent?.trim() || '';
+    let questionText = cells[1]?.textContent?.trim() || '';
+
+    // Check if user accidentally put the question number in the question text column
+    if (qNoText === '' && /^\s*(\d{1,2})\s*[.)]?\s+([A-Z].*)/s.test(questionText)) {
+      const match = questionText.match(/^\s*(\d{1,2})\s*[.)]?\s+(.*)/s);
+      if (match) {
+        qNoText = match[1];
+        questionText = match[2];
+        console.log(`[Parser] Extracted missing Q.No ${qNoText} from question text column`);
+      }
+    }
     const { base, suffix, isSubdivision } = parseQuestionNumber(qNoText);
 
     // If it's a subdivision or empty qNo, and we have a lastQuestion, merge it
@@ -689,12 +823,12 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
     if (base === 0 && qNoText !== '') return;
 
     // Extract question text (plain text for display/validation)
-    let questionText = cells[1]?.textContent?.trim() || '';
+    // questionText is already initialized and potentially modified above
     // Clean up the text - remove extra whitespace and line breaks
     questionText = questionText.replace(/\s+/g, ' ').trim();
 
     // Also get innerHTML to preserve images for display and Word document generation
-    let questionHtml = cells[1]?.innerHTML?.trim() || '';
+    const questionHtml = cells[1]?.innerHTML?.trim() || '';
 
     // Skip if question text is too short or looks like a header
     if (questionText.length < 5 && qNoText === '') return;
@@ -711,7 +845,7 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
     // This is critical: even if we don't detect images NOW, they may be present in the raw HTML
     // from DOCX/PDF conversion, or be attached later via reattachImages
     // ENHANCEMENT: Also capture images from deeply nested elements (e.g., in table cells within the question cell)
-    let originalHtml: string = questionHtml.replace(/\s+/g, ' ').trim();
+    const originalHtml: string = questionHtml.replace(/\s+/g, ' ').trim();
 
     // Log for debugging Q13x questions
     if (qNoText?.startsWith('13')) {
@@ -722,12 +856,40 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
       }
     }
 
+    // Extract raw metadata cells
+    let rawCo = cells[2]?.textContent?.trim() || '';
+    let rawLevel = cells[3]?.textContent?.trim() || '';
+    let rawMarks = cells[4]?.textContent?.trim() || '';
+
+    // Handle columns shifted/merged (Word Docx often merges them if user used 3 columns)
+    if (!rawMarks && rawLevel) {
+      const m = rawLevel.match(/^(L\d(?:-L\d)?)\s+(\d{1,2})$/i);
+      if (m) {
+        rawLevel = m[1];
+        rawMarks = m[2];
+      }
+    }
+    if (!rawLevel && rawCo) {
+      const m1 = rawCo.match(/^(CO\s*\d+)\s+(L\d(?:-L\d)?)\s+(\d{1,2})$/i);
+      if (m1) {
+        rawCo = m1[1];
+        rawLevel = m1[2];
+        rawMarks = m1[3];
+      } else {
+        const m2 = rawCo.match(/^(CO\s*\d+)\s+(L\d(?:-L\d)?)$/i);
+        if (m2) {
+          rawCo = m2[1];
+          rawLevel = m2[2];
+        }
+      }
+    }
+
     // Parse subdivisions - pass question text for better detection
-    const subdivisions = parseSubdivisions(row, cells, questionText);
+    const subdivisions = parseSubdivisions(row, cells, questionText, rawLevel, rawMarks);
     const hasSubdivisions = subdivisions.hasSubdivisions;
 
     // Extract CO - may have multiple COs for subdivisions, take the first one
-    let co = cells[2]?.textContent?.trim() || '';
+    let co = rawCo;
     co = co.split('\n')[0].trim();
     co = co.replace(/\s+/g, '');
     let coAutoAssigned = false;
@@ -739,7 +901,7 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
     }
 
     // Extract RBT Level from column - may have multiple levels for subdivisions
-    let level = cells[3]?.textContent?.trim() || '';
+    let level = rawLevel;
     level = level.split('\n')[0].trim();
     level = level.replace(/\s+/g, '');
     let levelAutoDetected = false;
@@ -767,7 +929,7 @@ const parseTableQuestions = (table: Element, part: 'A' | 'B' | 'C', iaType: stri
     }
 
     // Extract marks - may have multiple marks for subdivisions, sum them
-    let marksText = cells[4]?.textContent?.trim() || '2';
+    const marksText = rawMarks || '2';
     // Try to extract all numbers from marks cell
     const allMarksMatches = marksText.match(/\d+/g);
     let marks = 2;
@@ -877,7 +1039,7 @@ export const parseHTMLQuestions = (htmlContent: string, iaType: 'IA1' | 'IA2' | 
 
   const partA: Question[] = [];
   const partB: Question[] = [];
-  const partC: Question[] = [];
+  let partC: Question[] = [];
 
   // Extract metadata
   const metadata = extractMetadata(doc, iaType);
@@ -1134,10 +1296,19 @@ export const parseHTMLQuestions = (htmlContent: string, iaType: 'IA1' | 'IA2' | 
 
   console.log(`[Parser] Final question counts — Part A: ${partA.length}, Part B: ${partB.length}, Part C: ${partC.length}`);
 
+  // For IA1/IA2, teachers often label the 16-mark section as "Part C" instead of appending to "Part B".
+  // We logically merge Part C into Part B so the UI and validation service process them together as expected.
+  if (iaType === 'IA1' || iaType === 'IA2') {
+    if (partC.length > 0) {
+      partB.push(...partC);
+      partC = []; // Clear it
+    }
+  }
+
   return {
     partA,
     partB,
-    partC: (iaType === 'IA2' || iaType === 'IA3') ? partC : undefined,
+    partC: (iaType === 'IA2' || iaType === 'IA3') ? (partC.length > 0 ? partC : undefined) : undefined,
     metadata,
     originalHtml: htmlContent,
     globalImages: globalImages.length > 0 ? globalImages : undefined
@@ -1150,7 +1321,7 @@ export const generateCorrectedHTML = (
   iaType: 'IA1' | 'IA2' | 'IA3',
   _originalTitle?: string
 ): string => {
-  let html = parseResult.originalHtml;
+  const html = parseResult.originalHtml;
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
 
@@ -1174,103 +1345,75 @@ export const generateCorrectedHTML = (
     doc.documentElement.insertBefore(newHead, doc.body);
   }
 
-  // Update questions in the document
-  const updateQuestionsInTable = (table: Element, questions: Question[]) => {
-    const rows = table.querySelectorAll('tr');
-    let questionIndex = 0;
+  // Instead of updating by table part (which fails if the DOCX is one big table),
+  // update all questions globally in document order using question number matching!
+  const allQuestions = [...parseResult.partA, ...parseResult.partB, ...(parseResult.partC || [])];
 
-    rows.forEach((row) => {
-      const cells = row.querySelectorAll('td');
-      if (cells.length < 3) return;
+  // Build a lookup map from question number → question for fast matching
+  const qMap = new Map<string, Question>();
+  allQuestions.forEach(q => {
+    const normalized = q.questionNumber.trim().replace(/\s+/g, '').toLowerCase();
+    qMap.set(normalized, q);
+  });
 
-      const rowText = row.textContent?.trim().toUpperCase();
-      if (rowText === 'OR') return;
+  let fallbackIndex = 0; // Global fallback index across all tables
 
-      const qNoText = cells[0]?.textContent?.trim() || '';
-      const { base, isSubdivision } = parseQuestionNumber(qNoText);
+  // Find all table rows in the entire document
+  const allRows = doc.querySelectorAll('table tr');
 
-      if (isSubdivision || base === 0) {
-        // Hide merged sub-rows in the preview to avoid duplication
-        (row as HTMLElement).style.display = 'none';
-        return;
-      }
+  allRows.forEach((row) => {
+    const cells = row.querySelectorAll('td');
+    if (cells.length < 3) return;
 
-      if (questionIndex < questions.length) {
-        const question = questions[questionIndex];
+    const rowText = row.textContent?.trim().toUpperCase();
+    if (rowText === 'OR') return;
 
-        // Update question text if it was fixed
-        if (question.isFixed && cells[1]) {
-          // Preserve existing images in the cell
-          const existingImages = cells[1].querySelectorAll('img');
-          const imageHtmlParts: string[] = [];
-          existingImages.forEach(img => {
-            imageHtmlParts.push(img.outerHTML);
-          });
+    const qNoText = cells[0]?.textContent?.trim() || '';
+    const { base, isSubdivision } = parseQuestionNumber(qNoText);
 
-          // Set the new text + preserved images
-          const newTextHtml = question.text.replace(/<img[^>]+>/gi, ''); // Strip any images from text to avoid duplication
-          cells[1].innerHTML = newTextHtml + (imageHtmlParts.length > 0 ? '<br>' + imageHtmlParts.join('<br>') : '') + '<br>';
-        }
-
-        // Update RBT level — always use detectedLevel (updated after fixes/distribution)
-        if (cells[3]) {
-          cells[3].textContent = question.detectedLevel;
-        }
-
-        questionIndex++;
-      }
-    });
-  };
-
-  // Update Part A
-  const partATable = doc.querySelector('#parta, table#parta');
-  if (partATable && parseResult.partA.length > 0) {
-    updateQuestionsInTable(partATable, parseResult.partA);
-  }
-
-  // Update Part B
-  const partBTable = doc.querySelector('#partb, table#partb');
-  if (partBTable && parseResult.partB.length > 0) {
-    updateQuestionsInTable(partBTable, parseResult.partB);
-  }
-
-  // Update Part C
-  if ((iaType === 'IA2' || iaType === 'IA3') && parseResult.partC) {
-    const partCTable = doc.querySelector('#partc, table#partc');
-    if (partCTable && parseResult.partC.length > 0) {
-      updateQuestionsInTable(partCTable, parseResult.partC);
+    if (isSubdivision || base === 0) {
+      // Hide merged sub-rows in the preview to avoid duplication
+      (row as HTMLElement).style.display = 'none';
+      return;
     }
-  }
 
-  // If no tables with IDs, try to find tables by content
-  if (!partATable && !partBTable) {
-    const allTables = doc.querySelectorAll('table');
+    // Try to find the matching question by number first, then fallback to index
+    const normalizedQNo = qNoText.trim().replace(/\s+/g, '').toLowerCase();
+    let question = qMap.get(normalizedQNo);
 
-    allTables.forEach((table) => {
-      const headerText = table.textContent?.toLowerCase() || '';
+    if (!question && fallbackIndex < allQuestions.length) {
+      // Fallback: use sequential index (preserves old behavior when numbers don't match)
+      question = allQuestions[fallbackIndex];
+    }
 
-      if (headerText.includes('part a') || headerText.includes('part-a')) {
-        updateQuestionsInTable(table, parseResult.partA);
-      } else if (headerText.includes('part b') || headerText.includes('part-b')) {
-        updateQuestionsInTable(table, parseResult.partB);
-      } else if (headerText.includes('part c') || headerText.includes('part-c')) {
-        if (parseResult.partC) {
-          updateQuestionsInTable(table, parseResult.partC);
-        }
+    if (question) {
+      // Update question text if it was fixed or enhanced
+      if ((question.isFixed || question.isEnhanced) && cells[1]) {
+        // Preserve existing images in the cell
+        const existingImages = cells[1].querySelectorAll('img');
+        const imageHtmlParts: string[] = [];
+        existingImages.forEach(img => {
+          imageHtmlParts.push(img.outerHTML);
+        });
+
+        // Set the new text + preserved images
+        const newTextHtml = question.text.replace(/<img[^>]+>/gi, ''); // Strip any images from text to avoid duplication
+        cells[1].innerHTML = newTextHtml + (imageHtmlParts.length > 0 ? '<br>' + imageHtmlParts.join('<br>') : '') + '<br>';
       }
-    });
-  }
 
-  // If Part C table wasn't found by ID, search by content even if Part A/B were found by ID
-  if ((iaType === 'IA2' || iaType === 'IA3') && parseResult.partC && parseResult.partC.length > 0 && !doc.querySelector('#partc, table#partc')) {
-    const allTables = doc.querySelectorAll('table');
-    allTables.forEach((table) => {
-      const headerText = table.textContent?.toLowerCase() || '';
-      if (headerText.includes('part c') || headerText.includes('part-c')) {
-        updateQuestionsInTable(table, parseResult.partC!);
+      // Update RBT level — always use detectedLevel (updated after fixes/distribution)
+      if (cells[3]) {
+        cells[3].textContent = question.detectedLevel;
       }
-    });
-  }
+
+      // Update CO if it was changed during fix
+      if (cells[2] && question.co) {
+        cells[2].textContent = question.co;
+      }
+
+      fallbackIndex++;
+    }
+  });
 
   // Clean up any <style> blocks from Word that might have fixed widths
   const styleBlocks = doc.querySelectorAll('style');

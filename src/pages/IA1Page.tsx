@@ -15,6 +15,7 @@ import { validateIA1, ValidationResult } from '@/services/validationService';
 import { supabase } from '@/integrations/supabase/client';
 import { fixQuestionWithFallback } from '@/services/localQuestionFixer';
 import { validateDocument } from '@/services/documentValidator';
+import { syncOrPairLevels } from '@/utils/orPairSync';
 
 const IA1Page = () => {
   const navigate = useNavigate();
@@ -45,41 +46,26 @@ const IA1Page = () => {
     }
 
     if (selectedFile) {
-      try {
-        setIsProcessing(true);
-
-        // If PDF, create a blob URL for native preview
-        const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
-        if (isPdf) {
-          const blobUrl = URL.createObjectURL(selectedFile);
-          setPdfUrl(blobUrl);
-        }
-
-        // Parse file content for question extraction (works for all types)
-        const { html: content, pdfPageImages } = await parseFile(selectedFile);
-        setHtmlContent(content);
-        setPdfPageImagesRef(pdfPageImages);
-      } catch (error: any) {
-        console.error("File parsing error:", error);
-        toast({
-          title: "Error reading file",
-          description: `Failed to parse file: ${error.message || 'Unknown error'}`,
-          variant: "destructive",
-        });
-      } finally {
-        setIsProcessing(false);
+      const isPdf = selectedFile.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        const blobUrl = URL.createObjectURL(selectedFile);
+        setPdfUrl(blobUrl);
       }
+
+      setHtmlContent('');
+      setPdfPageImagesRef(undefined);
     } else {
       setHtmlContent('');
       setPdfUrl('');
+      setPdfPageImagesRef(undefined);
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!file) {
       toast({
         title: "No file selected",
-        description: "Please upload an HTML question paper first.",
+        description: "Please upload a question paper first.",
         variant: "destructive",
       });
       return;
@@ -88,8 +74,31 @@ const IA1Page = () => {
     setIsProcessing(true);
 
     try {
+      let currentHtmlContent = htmlContent;
+      let currentPdfPageImages = pdfPageImagesRef;
+
+      if (!currentHtmlContent && file.size > 0 && file.name !== 'restored.html') {
+        const { html: content, pdfPageImages } = await parseFile(file);
+
+        if (typeof content === 'string') {
+          currentHtmlContent = content;
+        } else if (content && typeof content === 'object') {
+          if ((content as any).html && typeof (content as any).html === 'string') {
+            currentHtmlContent = (content as any).html;
+          } else {
+            currentHtmlContent = JSON.stringify(content);
+          }
+        } else {
+          currentHtmlContent = String(content || '');
+        }
+
+        currentPdfPageImages = pdfPageImages;
+        setHtmlContent(currentHtmlContent);
+        setPdfPageImagesRef(pdfPageImages);
+      }
+
       // Step 1: Validate document is a valid question paper for this IA type
-      const docValidation = validateDocument(htmlContent, 'IA1');
+      const docValidation = validateDocument(currentHtmlContent, 'IA1');
       if (!docValidation.isValid) {
         toast({
           title: docValidation.errorTitle,
@@ -101,7 +110,7 @@ const IA1Page = () => {
       }
 
       // Step 2: Parse the HTML content to extract questions
-      const parsed = parseHTMLQuestions(htmlContent, 'IA1');
+      const parsed = parseHTMLQuestions(currentHtmlContent, 'IA1');
 
       // Check if we found any questions
       if (parsed.partA.length === 0 && parsed.partB.length === 0) {
@@ -118,9 +127,9 @@ const IA1Page = () => {
       const result = validateIA1({ partA: parsed.partA, partB: parsed.partB });
 
       // Attach PDF page images if available
-      if (pdfPageImagesRef) {
-        parsed.pdfPageImages = pdfPageImagesRef;
-        console.log(`[IA1] Attached ${pdfPageImagesRef.filter(Boolean).length} PDF page images to ParseResult`);
+      if (currentPdfPageImages) {
+        parsed.pdfPageImages = currentPdfPageImages;
+        console.log(`[IA1] Attached ${currentPdfPageImages.filter(Boolean).length} PDF page images to ParseResult`);
       }
 
       setParseResult(parsed);
@@ -243,7 +252,7 @@ const IA1Page = () => {
           };
 
           const updatedPartA = prev.partA.map(updateQuestion);
-          const updatedPartB = prev.partB.map(updateQuestion);
+          const updatedPartB = syncOrPairLevels(prev.partB.map(updateQuestion));
 
           // IMPORTANT: Re-validate but skip errors for fixed questions
           // Create copies with isFixed preserved
@@ -358,7 +367,7 @@ const IA1Page = () => {
 
     try {
       // Process in batches of 3 to avoid overwhelming the edge function
-      const BATCH_SIZE = 3;
+      const BATCH_SIZE = 10;
       for (let i = 0; i < errorQuestions.length; i += BATCH_SIZE) {
         const batch = errorQuestions.slice(i, i + BATCH_SIZE);
 
@@ -466,7 +475,7 @@ const IA1Page = () => {
         };
 
         const updatedPartA = prev.partA.map(applyFix);
-        const updatedPartB = prev.partB.map(applyFix);
+        const updatedPartB = syncOrPairLevels(prev.partB.map(applyFix));
 
         // Re-validate with fixed questions (validation now skips isFixed questions)
         const tempResult = validateIA1({ partA: [...updatedPartA], partB: [...updatedPartB] });
@@ -768,7 +777,7 @@ const IA1Page = () => {
 
       // Apply changes via AI — collect results
       const distFixResults = new Map<string, { text: string; newLevel: string }>();
-      for (const { question, newLevel } of questionsToChange) {
+      await Promise.all(questionsToChange.map(async ({ question, newLevel }) => {
         try {
           const result = await fixQuestionWithFallback(
             supabase,
@@ -787,7 +796,7 @@ const IA1Page = () => {
         } catch (err) {
           console.error(`Failed to adjust question ${question.questionNumber} to ${newLevel}:`, err);
         }
-      }
+      }));
 
       // Apply ALL distribution changes atomically via functional state updater
       setParseResult(prev => {
@@ -809,7 +818,7 @@ const IA1Page = () => {
 
         // Apply fixes then force-clear ALL errors
         const updatedPartA = prev.partA.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined }));
-        const updatedPartB = prev.partB.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined }));
+        const updatedPartB = syncOrPairLevels(prev.partB.map(applyDistFix).map(q => ({ ...q, hasError: false, errorMessage: undefined })));
 
         // Re-validate (validation now skips isFixed questions)
         const tempResult = validateIA1({ partA: [...updatedPartA], partB: [...updatedPartB] });
@@ -910,15 +919,15 @@ const IA1Page = () => {
             IA 1 LEVEL CHECKING
           </h1>
           <p className="text-muted-foreground">
-            50 Marks • CO1 Focus • PDF, Word, HTML Formats
+            50 Marks • CO1 Focus • HTML, Word Formats
           </p>
         </div>
 
         {/* Upload Section */}
         <div className="mb-8">
           <FileUpload
-            accept=".html,.htm,.docx,.doc,.pdf"
-            acceptLabel="Accepted formats: HTML, Word, PDF"
+            accept=".html,.htm,.docx,.doc"
+            acceptLabel="Accepted formats: HTML, WORD DOCX"
             file={file}
             onFileSelect={handleFileSelect}
           />
@@ -934,7 +943,7 @@ const IA1Page = () => {
               /* Native PDF preview using browser's built-in viewer */
               <div style={{ height: '1200px' }}>
                 <iframe
-                  src={pdfUrl}
+                  src={`${pdfUrl}#toolbar=0&navpanes=0`}
                   style={{ width: '100%', height: '100%', border: 'none' }}
                   title="PDF Preview"
                 />

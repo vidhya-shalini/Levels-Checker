@@ -1,20 +1,34 @@
 import { ParseResult } from './parser/htmlParser';
 import { Question } from '@/components/QuestionDisplay';
+import { CIT_LOGO_BASE64 } from '@/assets/citLogoBase64';
 
-// Fetch the CIT logo as a data URL
+// CIT logo is directly available as a Base64 data URL
+// No fetch needed — baked into the JS bundle at build time
+// This guarantees the logo works in downloaded HTML files (offline, no server needed)
 const fetchLogoAsDataUrl = async (): Promise<string> => {
-    try {
-        const response = await fetch('/src/assets/cit-logo.png');
-        const blob = await response.blob();
-        return new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(blob);
-        });
-    } catch (e) {
-        console.warn('Could not fetch CIT logo');
-        return '';
+    // Validate the base64 string is actually present and valid
+    if (CIT_LOGO_BASE64 && CIT_LOGO_BASE64.startsWith('data:image/')) {
+        return CIT_LOGO_BASE64;
     }
+    // Fallback: try to dynamically import the PNG file and convert to base64
+    console.warn('[HtmlGen] CIT_LOGO_BASE64 is missing or invalid, attempting fallback...');
+    try {
+        // Vite resolves this to a URL at build time; fetch it and convert to data URL
+        const logoModule = await import('@/assets/cit-logo.png');
+        const logoUrl = typeof logoModule === 'string' ? logoModule : logoModule.default;
+        if (logoUrl) {
+            const resp = await fetch(logoUrl);
+            const blob = await resp.blob();
+            return await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+            });
+        }
+    } catch (err) {
+        console.warn('[HtmlGen] Fallback logo fetch also failed:', err);
+    }
+    return ''; // No logo available
 };
 
 /**
@@ -130,6 +144,15 @@ export const generateHtmlDocument = async (parseResult: ParseResult, iaType: 'IA
         const partCPrimary = partC.filter(q => !q.questionNumber.toUpperCase().includes('B'));
         const partCPerQ = partCPrimary.length > 0 ? partCPrimary[0].marks : 15;
         partCLabel = `Part C (${partCPrimary.length} x ${partCPerQ} = ${partCPrimary.length * partCPerQ} marks)`;
+    }
+
+    let subjectDisplay = '________________';
+    if (metadata.subjectCode && metadata.subjectName) {
+        subjectDisplay = `${metadata.subjectCode} / ${metadata.subjectName}`;
+    } else if (metadata.subjectCode) {
+        subjectDisplay = metadata.subjectCode;
+    } else if (metadata.subjectName) {
+        subjectDisplay = metadata.subjectName;
     }
 
     let html = `<!DOCTYPE html>
@@ -396,7 +419,7 @@ export const generateHtmlDocument = async (parseResult: ParseResult, iaType: 'IA
             <td style="width: 20%; text-align: center;" contenteditable="true">${metadata.maxMarks}</td>
         </tr>
         <tr>
-            <td contenteditable="true">Subject Code / Name: ${metadata.subjectCode ? `${metadata.subjectCode} / ${metadata.subjectName}` : '________________'}</td>
+            <td contenteditable="true">Subject Code / Name: ${subjectDisplay}</td>
             <td style="text-align: center;">Time</td>
             <td style="text-align: center;" contenteditable="true">${metadata.time}</td>
         </tr>
@@ -423,7 +446,7 @@ export const generateHtmlDocument = async (parseResult: ParseResult, iaType: 'IA
         for (const level of ['L6', 'L5', 'L4', 'L3', 'L2', 'L1']) {
             for (const verb of rbtVerbsForCO[level]) {
                 // Match word boundary to avoid partial matches (e.g. "analyze" vs "analyzer")
-                const regex = new RegExp('\\\\b' + verb + '\\\\b', 'i');
+                const regex = new RegExp('\\b' + verb + '\\b', 'i');
                 if (regex.test(lower)) {
                     return level;
                 }

@@ -103,7 +103,7 @@ const validateOrPairsWithUpgrade = (questions: Question[], part: string): void =
   const pairs: Map<number, Question[]> = new Map();
 
   questions.forEach(q => {
-    const match = q.questionNumber.match(/(\d+)\s*([ABab])?/);
+    const match = q.questionNumber.match(/(\d+)\s*([ABab])/);
     if (match && match[2]) {
       const base = parseInt(match[1]);
       if (!pairs.has(base)) {
@@ -132,7 +132,7 @@ const validateOrPairsWithUpgrade = (questions: Question[], part: string): void =
         const questionWithSubs = q1HasSubs ? q1 : q2;
         const questionWithoutSubs = q1HasSubs ? q2 : q1;
 
-        if (!questionWithSubs.hasError && !questionWithSubs.isFixed) {
+        if (!questionWithSubs.isFixed) {
           questionWithSubs.hasError = true;
           questionWithSubs.expectedLevel = questionWithoutSubs.detectedLevel;
           questionWithSubs.expectedCo = questionWithoutSubs.co;
@@ -140,18 +140,28 @@ const validateOrPairsWithUpgrade = (questions: Question[], part: string): void =
         }
       }
 
-      // Check level mismatch (if both have same structure and no existing errors)
-      if (!q1.hasError && !q2.hasError && !q1.isFixed && !q2.isFixed) {
-        const level1 = getLevelNumber(q1.detectedLevel);
-        const level2 = getLevelNumber(q2.detectedLevel);
+      // Check level mismatch — OR pair level matching OVERRIDES mark-based errors
+      // Use the maximum of their expected OR detected levels to ensure they sync up
+      if (!q1.isFixed && !q2.isFixed) {
+        const l1Str = q1.expectedLevel || q1.detectedLevel;
+        const l2Str = q2.expectedLevel || q2.detectedLevel;
+
+        const level1 = getLevelNumber(l1Str);
+        const level2 = getLevelNumber(l2Str);
 
         if (level1 !== level2) {
-          const higherLevel = getHigherLevel(q1.detectedLevel, q2.detectedLevel);
-          const lowerQuestion = level1 < level2 ? q1 : q2;
+          const higherLevel = getHigherLevel(l1Str, l2Str);
 
-          lowerQuestion.hasError = true;
-          lowerQuestion.expectedLevel = higherLevel;
-          lowerQuestion.errorMessage = `OR pair ${baseNum}: Level mismatch. Change to ${higherLevel} to match OR pair.`;
+          if (q1.detectedLevel !== higherLevel) {
+            q1.hasError = true;
+            q1.expectedLevel = higherLevel;
+            q1.errorMessage = `OR pair ${baseNum}: Level mismatch. Change to ${higherLevel} to match OR pair.`;
+          }
+          if (q2.detectedLevel !== higherLevel) {
+            q2.hasError = true;
+            q2.expectedLevel = higherLevel;
+            q2.errorMessage = `OR pair ${baseNum}: Level mismatch. Change to ${higherLevel} to match OR pair.`;
+          }
         }
       }
 

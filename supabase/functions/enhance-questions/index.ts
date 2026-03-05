@@ -161,7 +161,7 @@ serve(async (req) => {
     const levelVerbs = RBT_VERBS[level] || RBT_VERBS.L2;
     
     // Detect current verb used in question and exclude it if re-enhancing
-    let excludedVerbs: string[] = [];
+    const excludedVerbs: string[] = [];
     if (useAlternativeVerb) {
       for (const verb of levelVerbs) {
         if (questionText.toLowerCase().startsWith(verb.toLowerCase())) {

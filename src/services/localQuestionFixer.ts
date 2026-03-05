@@ -78,7 +78,9 @@ export function fixQuestionLocally(
 }
 
 /**
- * Attempts to call the Supabase edge function; falls back to local fixing if it fails.
+ * Fixes a question by using the fast local fixer.
+ * Optionally tries the Supabase edge function with a short timeout for a better result.
+ * Local fix is ALWAYS used as the primary — edge function is a "nice to have" upgrade.
  */
 export async function fixQuestionWithFallback(
     supabase: any,
@@ -89,9 +91,13 @@ export async function fixQuestionWithFallback(
     subdivisionLevels?: string[],
     originalHtml?: string
 ): Promise<{ fixedQuestion: string; usedFallback: boolean }> {
-    // Try the edge function first
+    // Always produce a local fix immediately (instant, no network)
+    const localFixed = fixQuestionLocally(questionText, currentLevel, targetLevel, convertToSingle);
+
+    // Try the edge function with a short timeout (2 seconds max)
+    // If it succeeds quickly, use the better AI result; otherwise use local fix
     try {
-        const { data, error } = await supabase.functions.invoke('fix-question', {
+        const edgePromise = supabase.functions.invoke('fix-question', {
             body: {
                 questionText,
                 currentLevel,
@@ -101,14 +107,16 @@ export async function fixQuestionWithFallback(
             }
         });
 
-        if (!error && data?.fixedQuestion) {
-            return { fixedQuestion: data.fixedQuestion, usedFallback: false };
+        // Race: edge function vs 2-second timeout
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
+        const result = await Promise.race([edgePromise, timeoutPromise]);
+
+        if (result && !result.error && result.data?.fixedQuestion) {
+            return { fixedQuestion: result.data.fixedQuestion, usedFallback: false };
         }
     } catch {
-        // Edge function failed — fall through to local fix
+        // Edge function failed — use local fix (already computed)
     }
 
-    // Fallback: fix locally
-    const fixed = fixQuestionLocally(questionText, currentLevel, targetLevel, convertToSingle);
-    return { fixedQuestion: fixed, usedFallback: true };
+    return { fixedQuestion: localFixed, usedFallback: true };
 }
