@@ -1,142 +1,72 @@
-📘 RBT Level Checker App
-
+📘 RBT-Level-Checker-App
 🔍 Overview
+The RBT Level Checker App is an intelligent educational support tool designed to automatically identify the cognitive level of a given question or statement based on Revised Bloom’s Taxonomy (RBT).
 
-The RBT Level Checker App is an intelligent educational support tool designed to automatically identify the cognitive level of a question or statement based on Revised Bloom’s Taxonomy (RBT).
+The application analyzes the structure and action verbs used in questions and classifies them into one of the six cognitive domains: Remember, Understand, Apply, Analyze, Evaluate, and Create.
 
-The system analyzes the structure and action verbs present in a question and classifies it into one of the six cognitive domains:
-
-Remember
-
-Understand
-
-Apply
-
-Analyze
-
-Evaluate
-
-Create
-
-This tool helps educators, students, and academic institutions ensure that assessment questions are aligned with learning outcomes and cognitive skill levels, supporting Outcome-Based Education (OBE).
+This project is developed to assist educators, students, and academic institutions in ensuring Outcome-Based Education (OBE) compliance by verifying whether assessment questions are properly aligned with learning objectives and cognitive skill levels.
 
 🧠 What is Revised Bloom’s Taxonomy?
+Revised Bloom’s Taxonomy is a widely accepted educational framework used to categorize learning objectives based on cognitive complexity. It plays a vital role in modern education by helping in:
 
-Revised Bloom’s Taxonomy (RBT) is a globally recognized educational framework used to classify learning objectives according to levels of cognitive complexity.
-
-It plays a critical role in modern education by helping educators:
-
-✔ Design effective assessments
-✔ Measure higher-order thinking skills
-✔ Align teaching strategies with learning outcomes
-✔ Ensure balanced cognitive-level evaluation
-
+Designing effective assessments
+Measuring higher-order thinking skills
+Aligning teaching strategies with learning outcomes
+Ensuring balanced cognitive-level evaluation
 🔢 Cognitive Levels in RBT
-Level	Description
-Remember	Recall facts and basic concepts
-Understand	Explain ideas or concepts
-Apply	Use information in new situations
-Analyze	Examine relationships and draw connections
-Evaluate	Justify decisions or opinions
-Create	Produce original ideas or solutions
+Remember – Recall facts and basic concepts
+Understand – Explain ideas or concepts
+Apply – Use information in new situations
+Analyze – Draw connections among ideas
+Evaluate – Justify decisions or viewpoints
+Create – Produce original work or solutions
 🎯 Project Objectives
-
-The main goals of this project are:
-
-🔍 Automate the identification of RBT levels in questions
-
-🧑‍🏫 Assist faculty in preparing balanced question papers
-
-🎓 Help students understand the cognitive demand of exam questions
-
-🏫 Support academic institutions in OBE compliance and accreditation
-
-📊 Improve assessment quality and learning effectiveness
-
+Automate the identification of RBT levels in questions
+Support faculty in preparing balanced question papers
+Help students understand the cognitive demand of questions
+Assist institutions in OBE and accreditation processes
+Improve assessment quality and learning effectiveness
 ✨ Key Features
-
-✔ Automatic question classification based on Bloom’s Taxonomy
-✔ Helps educators design better assessments
-✔ Supports student learning analysis
-✔ Fast and lightweight web application
-✔ Covers all six cognitive levels of RBT
-
-⚙️ How It Works
-
-The application follows a simple workflow:
-
-1️⃣ User enters a question or statement in the input box
-2️⃣ The system scans for action verbs and sentence patterns
-3️⃣ The question is matched against predefined Bloom's taxonomy rules
-4️⃣ The corresponding RBT cognitive level is displayed
-
+🔍 Automatic classification of questions using RBT
+🧑‍🏫 Useful for educators and exam setters
+🎓 Supports student learning analysis
+⚡ Fast, simple, and lightweight application
+🧩 Covers all six cognitive levels of Bloom’s Taxonomy
 🛠️ Technology Stack
-Technology	Purpose
-HTML	Structure of the application
-CSS	Styling and user interface
-JavaScript	Core functionality
-Rule-Based Logic	RBT classification
-Git & GitHub	Version control
+Frontend: HTML, CSS, JavaScript
+Core Logic: Rule-based and keyword-based analysis
+Platform: Web Application
+Version Control: Git & GitHub
+⚙️ How It Works
+User enters a question or statement into the app
+The system scans for action verbs and sentence patterns
+The question is matched against predefined RBT rules
+The corresponding Bloom’s cognitive level is displayed
 🎯 Use Cases
-
-📄 Question Paper Design
-Ensuring balanced cognitive-level exam questions.
-
-🏫 Academic Audits & Accreditation
-Supporting OBE and accreditation processes.
-
-🧠 Learning Outcome Evaluation
-Analyzing whether assessments match intended learning outcomes.
-
-📊 Curriculum Development
-Improving syllabus design and assessment strategies.
-
-🧪 Educational Research
-Studying cognitive-level distribution in assessments.
-
+📄 Question paper setting and verification
+🏫 Academic audits and accreditation
+🧠 Learning outcome evaluation
+📊 Curriculum and syllabus design
+🧪 Educational research and analysis
 🔮 Future Enhancements
-
-To make the system more intelligent and scalable, future improvements may include:
-
-🤖 AI / Machine Learning-based semantic analysis
-📂 Bulk question upload and batch evaluation
-📊 Graphical visualization of RBT level distribution
+🤖 AI/ML-based semantic analysis
+📂 Bulk question upload and evaluation
+📊 Graphical visualization of RBT distribution
 🌐 Multi-language support
 🔐 Faculty login and role-based access
-📱 Mobile-friendly UI and PWA support
-
+📱 Mobile-friendly and PWA support
 📚 Educational Impact
-
-The RBT Level Checker App bridges the gap between educational theory and practical assessment design.
-
-By simplifying Bloom’s Taxonomy analysis, the project:
-
-✔ Promotes higher-order thinking skills
-✔ Improves assessment quality
-✔ Supports modern digital education systems
+The RBT Level Checker App bridges the gap between educational theory and practical assessment design. By simplifying Bloom’s Taxonomy analysis, the project promotes higher-order thinking, improves assessment quality, and supports modern digital education systems.
 
 🤝 Contribution
-
 Contributions are welcome!
-
-If you'd like to improve this project:
-
-Fork the repository
-
-Create a new branch
-
-Commit your changes
-
-Submit a Pull Request
+Feel free to fork this repository, raise issues, or submit pull requests to improve the application.
 
 📜 License
-
 This project is developed for educational and academic purposes.
 
 ⭐ Acknowledgements
-
-Revised Bloom’s Taxonomy Framework
-
-Educators and institutions promoting Outcome-Based Education (OBE)
-
-Open-source community for continuous learning and collaboration
+Revised Bloom’s Taxonomy framework
+Educators and institutions supporting Outcome-Based Education
+this is my readme create better way for this
+this is readme that enhance furthre
